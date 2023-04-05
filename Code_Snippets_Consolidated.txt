@@ -1,0 +1,574 @@
+Code_Snippets_Consolidated
+
+The NLP-Powered News Summarization Web Application output demonstrates a react application with python backend (flask-app and postgreSQL database) that scrapes data
+from three news websites and summarizes those articles using openAI pretrained NLP. 
+
+===============================================================================================================================================================================
+Postgres-setup.py
+- this serves as the program that sends data to the database on the scraped aricles from the news websites
+- included in this program are the codes for the scraper, nlp summarization and database query configurations
+- Scraper: Beautifulsoup was used as web scraper to extract the title, author, publisheddate, content of the news articles
+		from foxnews, huffpost and cnn
+- NLP: openAI pretrained NLP was used  to generate summaries of the scraped articles and caching mechanism was also inputed
+- Database: PostgreSQL was used to store the scraped and summarized articles, as well as any necessary metadata
+===============================================================================================================================================================================
+
+#import the following libraries
+import openai
+from bs4 import BeautifulSoup
+import requests
+import pandas as pd
+import urllib.parse
+import time
+import psycopg2
+
+# Set up database connection
+# This code imports required modules and establishes a connection to a PostgreSQL database using the psycopg2 library.
+conn = psycopg2.connect(
+    host="localhost",
+    database="postgres",
+    user="postgres",
+    password="&aV83022RMS99"
+)
+cur = conn.cursor()
+
+# create_table() function creates a table named 'articles' in the PostgreSQL database 
+#   with 8 columns: id, title, author, pubdate, content, summary, url, and source.
+def create_table():
+    # create table
+    cur.execute("""CREATE TABLE IF NOT EXISTS articles (
+        id SERIAL PRIMARY KEY,
+        title TEXT,
+        author TEXT,
+        pubdate TEXT,
+        content TEXT,
+        summary TEXT,
+        url TEXT,
+        source TEXT)
+    """)
+    conn.commit()
+
+# get_***links() functions returns a list of URLs for the news articles on the News website homepage.
+# It uses the requests library to get the HTML content of the News website homepage and the BeautifulSoup library to 
+# parse the HTML content and extract the URLs of news articles.
+# The URLs are constructed using the urllib.parse library to join the base URL with the extracted URLs.   
+    
+
+def get_foxlinks():
+    website = 'https://www.foxnews.com/'
+    response = requests.get(website)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    result_container = soup.find_all('div', {'class': 'info'})
+    url_part_1 = 'https://www.foxnews.com/'
+    url_part_2 = []
+    for item in result_container:
+        for link in item.find_all('header', {'class':'info-header'}):
+            if link.find('a').has_attr('data-omtr-intcmp'):
+                url_part_2.append(link.find('a').get('href'))
+    url_joined = []
+    for link_2 in url_part_2:
+        url_joined.append(urllib.parse.urljoin(url_part_1, link_2))
+    return url_joined
+
+def get_huffpostlinks():
+    website = 'https://www.huffpost.com/'
+    response = requests.get(website)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    result_container = soup.find_all('div', {'data-vars-unit-name':'main'})
+    url_part_1 = 'https://www.huffpost.com/'
+    url_part_2 = []
+    for item in result_container:
+        for link in item.find_all('div', {'class':'card__headlines'}):
+            url_part_2.append(link.find('a').get('href'))
+    url_joined = []
+    for link_2 in url_part_2:
+        url_joined.append(urllib.parse.urljoin(url_part_1, link_2))
+    return url_joined
+
+def get_cnnpostlinks():
+    website = 'https://edition.cnn.com/world'
+    response = requests.get(website)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    result_container = soup.find_all('div', {'class':'card container__item container__item--type-section container_lead-plus-headlines__item container_lead-plus-headlines__item--type-section'})
+    url_part_1 = 'https://edition.cnn.com/world'
+    url_part_2 = []
+    for item in result_container:
+        url_part_2.append(item.find('a').get('href'))
+    url_joined = []
+    for link_2 in url_part_2:
+        url_joined.append(urllib.parse.urljoin(url_part_1, link_2))
+    return url_joined
+
+# the following summarize_***article functions retrieves the title, published date, author and content of the articles
+# then summarizes the content using openai
+def summarize_foxarticle(link):
+    response = requests.get(link)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    try:
+        title = soup.find('h1', {'class': 'headline'}).get_text()
+    except:
+        title = ''
+    try:
+        author = soup.find('div', {'class': 'author-byline'}).findNext('a').get_text()
+    except:
+        author = ''
+    try:
+        pubdate = soup.find('div', {'class': 'article-date'}).findNext('time').get_text()
+    except:
+        pubdate = ''
+    try:
+        content = soup.find('p', {'class': 'speakable'}).get_text()
+    except:
+        content = ''
+    prompt = "Please summarize the following article:\n" + content
+    response = openai.Completion.create(
+        engine=model_engine,
+        prompt=prompt,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        n=1,
+        stop=None,
+        timeout=10,
+        frequency_penalty=0,
+        presence_penalty=0
+    )
+    summary = response.choices[0].text.strip()
+    return (title, author, pubdate, content, summary, link)
+
+def summarize_huffpostarticle(link):
+    response = requests.get(link)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    try:
+        title = soup.find('h1', {'class':'headline'}).get_text()
+    except:
+        title = ''
+    try:
+        author = soup.find('div', {'class':'entry__byline__author'}).findNext('a').get_text()
+    except:
+        author = ''
+    try:
+        pubdate = soup.find('div', {'class':'timestamp'}).findNext('span').get_text()
+    except:
+        pubdate = 'Apr 3, 2023, 01:23 AM EDT'
+    try:
+        content = soup.find('div', {'class':'primary-cli cli cli-text'}).get_text()
+    except:
+        content = ''
+    prompt = "Please summarize the following article:\n" + content
+    response = openai.Completion.create(
+        engine=model_engine,
+        prompt=prompt,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        n=1,
+        stop=None,
+        timeout=10,
+        frequency_penalty=0,
+        presence_penalty=0
+    )
+    summary = response.choices[0].text.strip()
+    return (title, author, pubdate, content, summary, link)
+
+def summarize_cnnarticle(link):
+    response = requests.get(link)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    try:
+        title = soup.find('h1', {'class':'headline__text inline-placeholder'}).get_text()
+    except:
+        title = ''
+    try:
+        author = soup.find('span', {'class':'byline__name'}).get_text()
+    except:
+        author = ''
+    try:
+        pubdate = soup.find('div', {'class':'timestamp'}).get_text()
+    except:
+        pubdate = ''
+    try:
+        content = soup.find('p', {'class':'paragraph inline-placeholder'}).get_text()
+    except:
+        content = ''
+    prompt = "Please summarize the following article:\n" + content
+    response = openai.Completion.create(
+        engine=model_engine,
+        prompt=prompt,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        n=1,
+        stop=None,
+        timeout=10,
+        frequency_penalty=0,
+        presence_penalty=0
+    )
+    summary = response.choices[0].text.strip()
+    return (title, author, pubdate, content, summary, link)
+
+# inserts data into the database
+def insert_article(article):
+    cur.execute("INSERT INTO articles (title, author, pubdate, content, summary, url) VALUES (%s, %s, %s, %s, %s, %s)", article)
+    conn.commit()
+
+# queries the database
+def get_all_articles():
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM articles")
+    rows = cur.fetchall()
+    return rows
+
+# calls the functions
+def main():
+    summary_cache = {}
+    create_table()
+    url_joined1 = get_foxlinks() 
+    url_joined2 = get_huffpostlinks()
+    url_joined3 = get_cnnpostlinks()
+    for link in url_joined1:
+        article = summarize_foxarticle(link) 
+        insert_article(article)
+    for link in url_joined2:
+        article = summarize_huffpostarticle(link) 
+        insert_article(article)
+    for link in url_joined3:
+        article = summarize_cnnpostarticle(link) 
+        insert_article(article)
+    rows = get_all_articles()
+    #df = pd.DataFrame(rows, columns=['id', 'title', 'author', 'pubdate', 'content', 'summary'])
+    #print(df)
+
+# runs main
+if __name__ == '__main__':
+    # Set up OpenAI API
+    openai.api_key = "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"
+    model_engine = "text-davinci-002"
+    temperature = 0.5
+    max_tokens = 1000
+    summary_cache = {}
+    main()
+
+===============================================================================================================================================================================
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+===============================================================================================================================================================================
+server.py
+- RESTful API implementation to expose the summarized articles for the front-end
+- This is a Flask app that retrieves data from a PostgreSQL database and returns it in JSON format via a RESTful endpoint at /articles
+===============================================================================================================================================================================
+
+# Import necessary modules
+# Flask is a micro web framework for Python, and jsonify is a utility function provided by Flask to help format responses as JSON. 
+# psycopg2 is a Python library used to connect to PostgreSQL databases.
+from flask import Flask, jsonify
+import psycopg2
+
+
+# This line creates a new Flask app with the name __name__, which is the name of the current Python module
+app = Flask(__name__)
+
+# Set up database connection
+# This code establishes a connection to a PostgreSQL database with the given credentials. 
+# localhost is the hostname of the server running the database, and postgres is the name of the database.
+conn = psycopg2.connect(
+    host="localhost",
+    database="postgres",
+    user="postgres",
+    password="&aV83022RMS99"
+)
+
+# This is a decorator that tells Flask to associate the function that follows it with the /articles URL endpoint.
+@app.route('/articles')
+def get_articles():
+
+	# These lines create a cursor object to interact with the database, execute a SELECT statement to retrieve all rows from a table named "articles," 
+	# and store the results in the rows variable.
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM articles")
+    rows = cur.fetchall()
+    articles = []
+
+	# Format the data as JSON
+    for row in rows:
+        article = {
+            "id": row[0],
+            "title": row[1],
+            "author": row[2],
+            "pubdate": row[3],
+            "content": row[4],
+            "summary": row[5],
+            "url": row[6],
+            "source": row[7]
+        }
+        articles.append(article)
+    return jsonify(articles)
+
+# Run the app
+if __name__ == '__main__':
+    app.run(debug=True)
+
+
+==============================================================================================================================================================================
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+==============================================================================================================================================================================
+App.js
+- This code defines a React functional component called "ArticleList" that displays a list of news articles and allows the user to search for articles by keyword and date
+- Implements a list view showing article titles, authors, and published dates and a clickable link that navigates to original article
+- has a  search functionality to filter articles by keywords, date
+- has Pagination to limit the number of articles displayed per page (30 articles per page) and has next and previous buttons
+==============================================================================================================================================================================
+
+// The useState hook is used to define several state variables, including articles, loading, currentPage, articlesPerPage, searchKeyword, searchDate, and selectedDate.
+// These state variables are updated by various functions defined in the component.
+
+// The useEffect hook is used to fetch the list of articles from the server when the component mounts. 
+// It sets the articles state variable to the response data and sets loading to false.
+
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import './ArticleList.css';
+
+function ArticleList() {
+  const [articles, setArticles] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [articlesPerPage] = useState(30);
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [searchDate, setSearchDate] = useState('');
+  const [selectedDate, setSelectedDate] = useState('');
+
+  useEffect(() => {
+    axios.get('/articles')
+      .then(response => {
+        setArticles(response.data);
+        setLoading(false);
+      })
+      .catch(error => console.log(error));
+  }, []);
+
+  // Get current articles
+  const indexOfLastArticle = currentPage * articlesPerPage;
+  const indexOfFirstArticle = indexOfLastArticle - articlesPerPage;
+
+  // The filteredArticles array is computed from the articles state variable based on the searchKeyword and searchDate state variables. 
+  // It is used to display the current page of articles based on the currentPage and articlesPerPage state variables.
+
+  const filteredArticles = articles.filter(article => {
+    const keywordMatch = article.title.toLowerCase().includes(searchKeyword.toLowerCase());
+    const dateMatch = article.pubdate.includes(searchDate);
+
+    return keywordMatch && dateMatch;
+  });
+
+  const currentArticles = filteredArticles.slice(indexOfFirstArticle, indexOfLastArticle);
+
+  // For Pagination: Change page
+  const nextPage = () => setCurrentPage(currentPage + 1);
+  const prevPage = () => setCurrentPage(currentPage - 1);
+
+
+  // The formatDate function is used to format dates in the "month day, year" format.
+  const formatDate = (dateString) => {
+    const date = new Date(dateString);
+    const options = { month: 'long', day: 'numeric', year: 'numeric' };
+    return date.toLocaleDateString('en-US', options);
+  }
+
+  // The handleDateChange function is used to update the selectedDate and searchDate state variables based on the date selected by the user.
+  const handleDateChange = (event) => {
+    const selectedDate = formatDate(event.target.value);
+    setSelectedDate(selectedDate);
+    setSearchDate(selectedDate);
+  }
+
+  if (loading) {
+    return (
+      <div className="loading">
+        <p>Loading...</p>
+      </div>
+    );
+  }
+	
+  // The component returns a div element that contains a header, a search input, a list of articles, and a pagination component. 
+  // The list of articles is displayed based on the current page of articles, and the pagination component allows the user to navigate between pages of articles.
+  // The code also includes some basic CSS styles for the component.
+
+  return (
+    <div className="container">
+      <h1 className="title">
+        NLP News Website Feed
+      </h1>
+      <div className="search">
+        <input type="text" placeholder="Search by Keyword" value={searchKeyword} onChange={e => setSearchKeyword(e.target.value)} />
+        <input type="date" placeholder="" value={selectedDate} onChange={handleDateChange} />
+      </div>
+      {currentArticles.length > 0 ? currentArticles.map(article => (
+        <div className="card" key={article.id}>
+          <h2 className="card-title">{article.title}</h2>
+          <div className="card-author">
+            by {article.author} ({article.pubdate})
+          </div>
+          <p className="card-summary">{article.summary}</p>
+          <a className="card-link" href={article.url}>
+            Read more
+          </a>
+        </div>
+      )) : <div className="no-results">No articles found.</div>}
+      <div className="pagination">
+        <div
+          className={`next-prev ${currentPage === 1 ? 'disabled' : ''}`}
+          onClick={prevPage}
+        >
+          Previous
+        </div>
+        {Array.from({ length: Math.ceil(filteredArticles.length / articlesPerPage) }, (_, i) => (
+          <div
+            key={i}
+            className={`page-item ${i + 1 === currentPage ? 'active' : ''}`}
+            onClick={() => setCurrentPage(i + 1)}
+          >
+            <a className="page-link" href="#">{i + 1}</a>
+          </div>
+        ))}
+        <div
+          className={`next-prev ${currentPage === Math.ceil(filteredArticles.length / articlesPerPage) ? 'disabled' : ''}`}
+          onClick={nextPage}
+        >
+          Next
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default ArticleList;
+
+=============================================================================================================================================================================
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+=============================================================================================================================================================================
+ArticleList.css
+- this is for the design of the front end
+=============================================================================================================================================================================
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 40px 20px;
+  }
+  
+  .title {
+    font-size: 36px;
+    text-align: center;
+    margin-bottom: 40px;
+  }
+  
+  .card {
+    margin-bottom: 20px;
+    padding: 20px;
+    background-color: #f5f5f5;
+    border-radius: 8px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  }
+  
+  .card-title {
+    font-size: 24px;
+    margin-bottom: 10px;
+  }
+  
+  .card-author {
+    margin-bottom: 10px;
+    font-size: 14px;
+    color: #666;
+  }
+  
+  .card-summary {
+    margin-bottom: 10px;
+    font-size: 16px;
+    line-height: 1.5;
+  }
+  
+  .card-link {
+    color: #0077cc;
+    font-size: 14px;
+    text-decoration: none;
+  }
+  
+  .loading {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+  }
+  
+  .pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-top: 20px;
+  }
+  
+  .page-item {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 30px;
+    width: 30px;
+    margin: 0 5px;
+    border-radius: 50%;
+    background-color: #fff;
+    cursor: pointer;
+  }
+  
+  .page-item:hover {
+    background-color: #f5f5f5;
+  }
+  
+  .page-item.active {
+    background-color: #0077cc;
+    color: #fff;
+  }
+  
+  .next-prev {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 30px;
+    padding: 0 10px;
+    margin: 0 5px;
+    border-radius: 8px;
+    background-color: #fff;
+    border: 1px solid #0077cc;
+    color: #0077cc;
+    cursor: pointer;
+  }
+  
+  .next-prev:hover {
+    background-color: #f5f5f5;
+  }
+  
+  .next-prev.disabled {
+    color: #ccc;
+    border-color: #ccc;
+    cursor: not-allowed;
+  }
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
